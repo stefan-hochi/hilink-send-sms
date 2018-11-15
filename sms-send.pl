@@ -7,6 +7,7 @@ BEGIN {
     $HTTP::Headers::TRANSLATE_UNDERSCORE = 0;
 }
 use HTTP::Cookies;
+use feature qw(switch);
 
 my $message = $ARGV[1];
 my $phone = $ARGV[0];
@@ -14,13 +15,18 @@ my $api = "192.168.8.1";
 
 package main;
 
-my $getua = LWP::UserAgent->new;
-my $getrequest = HTTP::Request->new(GET => "http://" . $api . "/api/webserver/SesTokInfo");
-my $getresponse = $getua->request($getrequest);
+my $ua = LWP::UserAgent->new;
+my $request = HTTP::Request->new(GET => "http://" . $api . "/api/webserver/SesTokInfo");
+my $response = $ua->request($request);
+if (not $response->is_success)
+{
+	warn $response->as_string();
+}
+my $Session = getSession({ TokInfo => $response->decoded_content(), SesInfo => $response->decoded_content() });
 
-my $postheader = HTTP::Headers->new;
-$postheader->push_header("__RequestVerificationToken" => $getresponse->decoded_content =~ /<TokInfo>(.*?)<\/TokInfo>/);
-$postheader->push_header("Content-Type" => "text/xml");
+my $header = HTTP::Headers->new;
+$header->push_header("__RequestVerificationToken" => $Session->{'TokInfo'});
+$header->push_header("Content-Type" => "text/xml");
 
 my $data =
 "<?xml version='1.0' encoding='UTF-8'?>" .
@@ -34,18 +40,39 @@ my $data =
     "<Date>-1</Date>" .
 "</request>";
 
-my $postrequest = HTTP::Request->new(
+$request = HTTP::Request->new(
   "POST",
   "http://" . $api . "/api/sms/send-sms",
-  $postheader,
+  $header,
   $data,
 );
 
-my $postua = new LWP::UserAgent();
+$ua = new LWP::UserAgent();
 my $cookie_jar = HTTP::Cookies->new();
-$cookie_jar->set_cookie(0,"SessionID", $getresponse->decoded_content =~ /<SesInfo>SessionID=(.*?)<\/SesInfo>/,"/",$api);
-$postua->cookie_jar($cookie_jar);
+$cookie_jar->set_cookie(0,"SessionID", $Session->{'SesInfo'},"/",$api);
+$ua->cookie_jar($cookie_jar);
 
-my $postresponse = $postua->request($postrequest);
-print($postrequest->as_string());
-print($postresponse->as_string());
+my $post = $ua->request($request);
+if (not $response->is_success) { warn $response->as_string(); }
+print getErr($post->decoded_content());
+
+sub getSession
+{
+	my $param = shift;
+	return { 
+		TokInfo => $param->{'TokInfo'} =~ /<TokInfo>(.*?)<\/TokInfo>/,
+		SesInfo => $param->{'SesInfo'} =~ /<SesInfo>SessionID=(.*?)<\/SesInfo>/
+	};
+}
+sub getErr
+{
+	my $int = shift;
+	my $st;
+	switch:
+	{
+		if ($int =~ /<code>125002<\/code>/) { $st = "Invalid token"; }
+		if ($int =~ /<code>100002<\/code>/) { $st = "Unknown API function" ; }
+		if ($int =~ /<response>OK<\/response>/) { $st = "SMS Send";}
+	}
+	return $st;
+}
